@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lean E-Commerce Simulator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="loginScreen">
+    <h1>☕ Coffee & Tea Shop</h1>
+    <h2>Symulator Lean Management</h2>
+    <p>Wybierz stanowisko:</p>
+
+    <select id="roleSelect">
+        <option value="admin">Prowadząca</option>
+        <option value="A">Dział A - Obsługa zamówień</option>
+        <option value="B">Dział B - Magazyn</option>
+        <option value="C">Dział C - Pakowanie</option>
+        <option value="D">Dział D - Wysyłka</option>
+    </select>
+
+    <button onclick="login()">Zaloguj</button>
+</div>
+
+<div id="app" style="display:none;">
+    <div id="topBar">
+        <div>
+            🕘 Czas firmowy:
+            <span id="clock">08:00</span>
+        </div>
+
+        <div>
+            🖨️ Drukarka:
+            <span id="printerStatus">Wolna</span>
+        </div>
+
+        <div>
+            🚚 Kurier:
+            <span id="courierStatus">Nie przyjechał</span>
+        </div>
+    </div>
+
+    <h2 id="roleTitle"></h2>
+    <div id="content"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>
