@@ -165,7 +165,22 @@ async function startRound() {
   await loadAllData();
   renderCurrentRole();
 }
+function metricTile(label, value) {
+  return `<div class="metric-tile">
+    <span>${escapeHtml(label)}</span>
+    <strong>${value}</strong>
+  </div>`;
+}
 
+function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined) return "—";
+
+  const total = Math.max(0, Number(seconds) || 0);
+  const minutes = Math.floor(total / 60);
+  const remainingSeconds = Math.floor(total % 60);
+
+  return `${minutes} min ${String(remainingSeconds).padStart(2, "0")} s`;
+}
 function studentRoundSummaryHtml() {
   const completed = orders.filter(o => o.status === "SHIPPED");
   const inProcess = orders.filter(o => ["A","B","C","D","READY"].includes(o.status));
