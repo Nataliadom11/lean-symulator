@@ -88,7 +88,12 @@ function subscribeRealtime() {
 function renderCurrentRole() {
   const title = document.getElementById("roleTitle");
   const content = document.getElementById("content");
-  if (currentRole === "admin") renderAdmin(title, content);
+  if (currentRole === "admin") return renderAdmin(title, content);
+  if (simulationState && simulationState.round_status !== "running") {
+    title.innerText = "Symulator Lean Management";
+    content.innerHTML = `<div class="card waiting-note"><h3>Oczekiwanie na START rundy</h3><p>Prowadząca wyjaśnia zadanie. Po uruchomieniu rundy ekran odświeży się automatycznie, a wspólny czas ruszy od 08:00.</p></div>`;
+    return;
+  }
   if (currentRole === "A") renderDepartmentA(title, content);
   if (currentRole === "B") renderDepartmentB(title, content);
   if (currentRole === "C") renderDepartmentC(title, content);
@@ -109,11 +114,13 @@ function itemsListHtml(items) {
 }
 
 function renderAdmin(title, content) {
-  title.innerText = "Panel prowadzącej — AS-IS";
+  title.innerText = "Panel prowadzącej — koszyk wieloproduktowy";
   const products = [...new Set(warehouseSlots.map(x => x.product))].sort();
   const requests = orders.filter(o => o.data_issue_status === "requested");
   content.innerHTML = `
-    ${adminLiveDashboardHtml()}
+    <div class="card success-note">Połączenie ze wspólną bazą działa.</div>
+    ${roundControlHtml()}
+    ${studentRoundSummaryHtml()}
     ${requests.length ? `<div class="card customer-contact"><h3>Prośby o kontakt z klientem (${requests.length})</h3>${requests.map(customerRequestHtml).join("")}</div>` : ""}
     <div class="card">
       <h3>Nowe zamówienie</h3>
@@ -131,62 +138,71 @@ function renderAdmin(title, content) {
       <label class="checkbox-row"><input type="checkbox" id="badEmail" ${orderDraft.badEmail ? "checked" : ""}> Celowo błędny e-mail</label>
       <button id="createButton" onclick="createOrder()">Utwórz zamówienie</button>
     </div>
-    <div class="card"><h3>Szczegóły zamówień (${orders.length})</h3>${orders.map(adminOrderHtml).join("") || "Brak zamówień."}</div>`;
+    <div class="card"><h3>Wspólne zamówienia (${orders.length})</h3>${orders.map(adminOrderHtml).join("") || "Brak zamówień."}</div>`;
 }
 
-function adminLiveDashboardHtml() {
-  const count = status => orders.filter(o => o.status === status).length;
-  const waitingCustomer = orders.filter(o => o.status === "A" && o.data_issue_status === "requested").length;
-  const reworkB = orders.filter(o => o.status === "B" && (o.return_count || 0) > 0).length;
-  const missed = orders.filter(o => o.status === "READY" && o.missed_courier).length;
-  const shipped = count("SHIPPED");
-  const ready = count("READY");
-  const printing = printJobs.find(j => j.status === "printing");
-  const queued = printJobs.filter(j => j.status === "queued").length;
-  const wip = orders.filter(o => ["A","B","C","D","READY"].includes(o.status)).length;
-  const printerText = printing
-    ? `${printing.department}/${printing.station}: ${printing.document_type === "order_card" ? "karta zamówienia" : "etykieta"}`
-    : "Wolna";
-  return `
-    <div class="card admin-dashboard">
-      <h3>Stan procesu na żywo</h3>
-      <div class="metric-grid">
-        ${metricTile("WIP w procesie", wip)}
-        ${metricTile("Dział A", count("A"))}
-        ${metricTile("Oczekuje na klienta", waitingCustomer)}
-        ${metricTile("Dział B", count("B"))}
-        ${metricTile("Poprawki w B", reworkB)}
-        ${metricTile("Dział C", count("C"))}
-        ${metricTile("Dział D", count("D"))}
-        ${metricTile("Strefa wysyłkowa", ready)}
-        ${metricTile("Wysłane", shipped)}
-        ${metricTile("Nie zdążyły na kuriera", missed)}
-      </div>
+
+
+function roundControlHtml() {
+  const status = simulationState?.round_status || "waiting";
+  if (status === "running") {
+    return `<div class="card round-control running"><h3>Runda AS-IS</h3><div><b>Status:</b> RUNDA W TOKU</div><div><b>Czas firmowy:</b> ${formatMinute(getSimulationMinute())}</div></div>`;
+  }
+  return `<div class="card round-control waiting"><h3>Runda AS-IS</h3><div><b>Status:</b> OCZEKIWANIE NA START</div><div><b>Czas firmowy:</b> 08:00</div><button onclick="startRound()">START RUNDY</button></div>`;
+}
+
+async function startRound() {
+  if (!confirm("Uruchomić rundę AS-IS? Wspólny zegar wszystkich stanowisk ruszy od 08:00.")) return;
+  const { data, error } = await supabaseClient.from("simulation_state").update({
+    round_status: "running",
+    started_at: new Date().toISOString(),
+    start_minute: 480,
+    courier_processed: false,
+    courier_processed_at: null
+  }).eq("id", 1).eq("round_status", "waiting").select("id");
+  if (error) return alert(error.message);
+  if (!data || !data.length) return alert("Runda została już uruchomiona w innym oknie.");
+  await loadAllData();
+  renderCurrentRole();
+}
+
+function studentRoundSummaryHtml() {
+  const completed = orders.filter(o => o.status === "SHIPPED");
+  const inProcess = orders.filter(o => ["A","B","C","D","READY"].includes(o.status));
+  const waitingCustomer = orders.filter(o => o.data_issue_status === "requested").length;
+  const reworkTotal = orders.reduce((sum,o) => sum + Number(o.return_count || 0), 0);
+  const extraClicks = orders.reduce((sum,o) => sum + Number(o.search_clicks || 0), 0);
+  const queuedPrint = printJobs.filter(j => j.status === "queued").length;
+  const missed = orders.filter(o => o.missed_courier).length;
+  const picking = orders.filter(o => o.picking_time_seconds != null);
+  const packing = orders.filter(o => o.packing_time_seconds != null);
+  const avg = (list, key) => list.length ? Math.round(list.reduce((sum,o) => sum + Number(o[key] || 0),0) / list.length) : null;
+  return `<div class="card round-summary">
+    <h3>Dane do analizy rundy AS-IS</h3>
+    <p>Ta sekcja zawiera pomiary procesu. Interpretację danych wykonują uczestnicy.</p>
+    <div class="metric-grid">
+      ${metricTile("Zamówienia w toku", inProcess.length)}
+      ${metricTile("Zamówienia wysłane", completed.length)}
+      ${metricTile("Oczekujące na klienta", waitingCustomer)}
+      ${metricTile("Liczba zwrotów/poprawek", reworkTotal)}
+      ${metricTile("Dodatkowe kliknięcia magazynu", extraClicks)}
+      ${metricTile("Dokumenty w kolejce drukarki", queuedPrint)}
+      ${metricTile("Nie zdążyły na kuriera", missed)}
     </div>
-    <div class="card resource-card">
-      <h3>Wspólne zasoby</h3>
-      <div><b>Drukarka:</b> ${escapeHtml(printerText)}</div>
-      <div><b>Dokumenty oczekujące:</b> ${queued}</div>
-      <div><b>Czas firmowy:</b> ${formatMinute(getSimulationMinute())}</div>
-      <div><b>Kurier:</b> ${simulationState && simulationState.courier_processed ? "odbiór zakończony" : `przyjazd ${simulationState ? formatMinute(Number(simulationState.courier_minute)) : "16:00"}`}</div>
-    </div>`;
-}
-
-function metricTile(label, value) {
-  return `<div class="metric-tile"><span>${escapeHtml(label)}</span><strong>${value}</strong></div>`;
-}
-
-function formatDuration(seconds) {
-  if (seconds === null || seconds === undefined) return "—";
-  const total = Math.max(0, Number(seconds) || 0);
-  const m = Math.floor(total / 60);
-  const s = Math.floor(total % 60);
-  return `${m} min ${String(s).padStart(2,"0")} s`;
-}
-
-function customerWaitSeconds(order) {
-  if (!order.data_issue_reported_at || !order.data_issue_resolved_at) return null;
-  return Math.max(0, Math.floor((new Date(order.data_issue_resolved_at) - new Date(order.data_issue_reported_at)) / 1000));
+    <div class="metrics-detail">
+      <div>Średni czas kompletacji B: <b>${formatDuration(avg(picking,"picking_time_seconds"))}</b></div>
+      <div>Średni czas kontroli i pakowania C: <b>${formatDuration(avg(packing,"packing_time_seconds"))}</b></div>
+    </div>
+    <h4>Pytania do VSM</h4>
+    <ol>
+      <li>Gdzie gromadziła się praca w toku?</li>
+      <li>W których miejscach procesu pojawiało się oczekiwanie?</li>
+      <li>Które czynności wykonywano ponownie?</li>
+      <li>Gdzie przepływ informacji był niepełny lub opóźniony?</li>
+      <li>Jakie zdarzenia mogły wydłużyć całkowity czas realizacji zamówienia?</li>
+      <li>Co mogło wpłynąć na to, że część przesyłek nie zdążyła na odbiór kuriera?</li>
+    </ol>
+  </div>`;
 }
 
 function customerRequestHtml(order) {
@@ -256,30 +272,7 @@ function cartHtml() {
 }
 
 function adminOrderHtml(order) {
-  const customerWait = customerWaitSeconds(order);
-  const cardJob = printJobs.find(j => j.order_id === order.id && j.document_type === "order_card");
-  const labelJob = printJobs.find(j => j.order_id === order.id && j.document_type === "shipping_label");
-  const printWait = [cardJob, labelJob].filter(Boolean).reduce((sum, job) => {
-    if (!job.created_at || !job.started_at) return sum;
-    return sum + Math.max(0, Math.floor((new Date(job.started_at) - new Date(job.created_at)) / 1000));
-  }, 0);
-  return `<div class="card order-metrics">
-    <b>Zamówienie ${order.order_number}</b><br>
-    Klient: ${escapeHtml(order.customer_name)}<br>
-    Status: ${escapeHtml(order.status)}${order.claimed_by ? `<br>Aktualne stanowisko: ${escapeHtml(order.claimed_by)}` : ""}
-    ${itemsListHtml(itemsForOrder(order.id))}
-    <div class="metrics-detail">
-      <div>Oczekiwanie na dane klienta: <b>${formatDuration(customerWait)}</b></div>
-      <div>Czas kompletacji B: <b>${formatDuration(order.picking_time_seconds)}</b></div>
-      <div>Dodatkowe kliknięcia magazynu: <b>${order.search_clicks || 0}</b></div>
-      <div>Zwroty/poprawki: <b>${order.return_count || 0}</b></div>
-      <div>Czas kontroli i pakowania C: <b>${formatDuration(order.packing_time_seconds)}</b></div>
-      <div>Oczekiwanie w kolejce drukarki: <b>${printWait ? formatDuration(printWait) : "—"}</b></div>
-      <div>Gotowe do wysyłki: <b>${order.shipping_ready_at ? "tak" : "nie"}</b></div>
-      <div>Odebrane przez kuriera: <b>${order.status === "SHIPPED" ? "tak" : "nie"}</b></div>
-      <div>Nie zdążyło na kuriera: <b>${order.missed_courier ? "tak" : "nie"}</b></div>
-    </div>
-  </div>`;
+  return `<div class="card"><b>Zamówienie ${order.order_number}</b><br>Klient: ${escapeHtml(order.customer_name)}<br>Status: ${escapeHtml(order.status)}${order.return_count ? `<br>Zwroty/poprawki: ${order.return_count}` : ""}${itemsListHtml(itemsForOrder(order.id))}</div>`;
 }
 
 async function createOrder() {
@@ -655,6 +648,7 @@ async function finishShipping(orderId) {
 
 function getSimulationMinute() {
   if (!simulationState) return 480;
+  if (simulationState.round_status !== "running") return Number(simulationState.start_minute || 480);
   const start = new Date(simulationState.started_at).getTime();
   const elapsed = Math.max(0, Date.now() - start);
   return Number(simulationState.start_minute) + Math.floor(elapsed / Number(simulationState.milliseconds_per_minute));
@@ -685,7 +679,7 @@ function startCourierLoop() {
 }
 
 async function processCourierPickup() {
-  if (!simulationState || simulationState.courier_processed) return;
+  if (!simulationState || simulationState.round_status !== "running" || simulationState.courier_processed) return;
   if (getSimulationMinute() < Number(simulationState.courier_minute)) return;
   const nowIso = new Date().toISOString();
   const { data, error } = await supabaseClient.from("simulation_state").update({ courier_processed: true, courier_processed_at: nowIso }).eq("id", 1).eq("courier_processed", false).select("id");
